@@ -1,0 +1,177 @@
+local Version = "1.6.31"
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/download/" .. Version .. "/main.lua"))()
+local Window = WindUI:CreateWindow({Title="LaserTag", Size=UDim2.new(0,500,0,400), Theme="Dark"})
+
+-- Tabs
+local MainTab = Window:Tab({Title="Main", Icon="house"})
+local ESPTab = Window:Tab({Title="ESP", Icon="eye"})
+local MiscTab = Window:Tab({Title="Misc", Icon="settings"})
+
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Variables
+local WalkSpeedValue = 22
+local AimbotEnabled = false
+local AutoShootEnabled = false
+local ESPEnabled = false
+
+-- Helpers
+local function getTeam(plr)
+	if plr.Team and plr.Team.Name then
+		return plr.Team.Name
+	end
+	return nil
+end
+
+-- MAIN TAB
+MainTab:Input({
+	Title="WalkSpeed",
+	Desc="Set your walking speed",
+	Value=tostring(WalkSpeedValue),
+	Type="Input",
+	Placeholder="Enter speed...",
+	Callback=function(input)
+		local val = tonumber(input)
+		if val then
+			WalkSpeedValue = val
+		end
+	end
+})
+
+MainTab:Toggle({
+	Title="Aimbot",
+	Desc="Automatically aim at enemies",
+	Type="Checkbox",
+	Default=false,
+	Callback=function(state)
+		AimbotEnabled = state
+	end
+})
+
+MainTab:Toggle({
+	Title="Auto Shoot",
+	Desc="Automatically shoots when aiming at enemies",
+	Type="Checkbox",
+	Default=false,
+	Callback=function(state)
+		AutoShootEnabled = state
+	end
+})
+
+-- Aimbot Logic
+RunService.RenderStepped:Connect(function()
+	if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+		LocalPlayer.Character.Humanoid.WalkSpeed = WalkSpeedValue
+	end
+
+	if not AimbotEnabled then return end
+
+	local myTeam = getTeam(LocalPlayer)
+	if not myTeam then return end
+
+	local nearestTarget, nearestDist
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+			local enemyTeam = getTeam(plr)
+			if myTeam ~= enemyTeam then
+				local head = plr.Character:FindFirstChild("Head")
+				if head then
+					local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+					if onScreen then
+						local mousePos = UserInputService:GetMouseLocation()
+						local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+						if not nearestDist or dist < nearestDist then
+							nearestDist = dist
+							nearestTarget = head
+						end
+					end
+				end
+			end
+		end
+	end
+
+	if nearestTarget then
+		Camera.CFrame = CFrame.new(Camera.CFrame.Position, nearestTarget.Position)
+		if AutoShootEnabled then
+			mouse1click()
+		end
+	end
+end)
+
+-- ESP
+local function createESP(character, color)
+	if not character or character:FindFirstChild("LaserTagESP") then return end
+	local h = Instance.new("Highlight")
+	h.Name = "LaserTagESP"
+	h.Adornee = character
+	h.FillColor = color
+	h.FillTransparency = 0.5
+	h.OutlineColor = Color3.new(0,0,0)
+	h.OutlineTransparency = 0
+	h.Parent = character
+end
+
+local function removeESP(character)
+	local h = character and character:FindFirstChild("LaserTagESP")
+	if h then h:Destroy() end
+end
+
+local function updateESP()
+	if not ESPEnabled then
+		for _,plr in pairs(Players:GetPlayers()) do
+			if plr.Character then removeESP(plr.Character) end
+		end
+		return
+	end
+
+	local myTeam = getTeam(LocalPlayer)
+	for _,plr in pairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character then
+			local enemyTeam = getTeam(plr)
+			if myTeam == "Pink" then
+				if enemyTeam == "Green" then
+					createESP(plr.Character, Color3.fromRGB(255,0,0))
+				else
+					createESP(plr.Character, Color3.fromRGB(255,105,180))
+				end
+			elseif myTeam == "Green" then
+				if enemyTeam == "Pink" then
+					createESP(plr.Character, Color3.fromRGB(255,0,0))
+				else
+					createESP(plr.Character, Color3.fromRGB(0,255,0))
+				end
+			end
+		end
+	end
+end
+
+ESPTab:Toggle({
+	Title="Enable ESP",
+	Desc="Highlights team colors dynamically",
+	Type="Checkbox",
+	Default=false,
+	Callback=function(state)
+		ESPEnabled = state
+		updateESP()
+	end
+})
+
+Players.PlayerAdded:Connect(function(p)
+	p.CharacterAdded:Connect(function()
+		task.wait(1)
+		updateESP()
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+	if p.Character then removeESP(p.Character) end
+end)
+
+RunService.RenderStepped:Connect(function()
+	if ESPEnabled then updateESP() end
+end)
