@@ -20,15 +20,18 @@ local LocalPlayer = Players.LocalPlayer
 local WalkSpeedValue = 22
 local AimbotEnabled = false
 local AutoShootEnabled = false
-local ESPEnabled = false
+local ESPTeamEnabled = false
+local ESPEnemyEnabled = false
+local AutoHideFromDeathEnabled = false
+local KillLowestEnabled = false
 local EquippedWeapon = nil
+local SafeSpot = CFrame.new(-113.013, 105.444, 67.366)
+local IsHiding = false
+local LastPos
 
 -- Helpers
 local function getTeam(plr)
-	if plr.Team and plr.Team.Name then
-		return plr.Team.Name
-	end
-	return nil
+	return plr.Team and plr.Team.Name or nil
 end
 
 local function isAlive(plr)
@@ -38,34 +41,14 @@ end
 
 local function isVisible(target)
 	local origin = Camera.CFrame.Position
-	local direction = (target.Position - origin)
-	local ray = Ray.new(origin, direction)
+	local ray = Ray.new(origin, (target.Position - origin))
 	local hitPart = workspace:FindPartOnRayWithIgnoreList(ray, {LocalPlayer.Character})
 	return hitPart == nil or hitPart:IsDescendantOf(target.Parent)
 end
 
-local function getNearestEnemy()
-	local myTeam = getTeam(LocalPlayer)
-	if not myTeam then return nil end
-	local nearest, nearestDist
-	for _, plr in ipairs(Players:GetPlayers()) do
-		if plr ~= LocalPlayer and isAlive(plr) then
-			local enemyTeam = getTeam(plr)
-			if enemyTeam and enemyTeam ~= myTeam and plr.Character and plr.Character:FindFirstChild("Head") then
-				local head = plr.Character.Head
-				local dist = (Camera.CFrame.Position - head.Position).Magnitude
-				if (not nearest or dist < nearestDist) and isVisible(head) then
-					nearest, nearestDist = head, dist
-				end
-			end
-		end
-	end
-	return nearest
-end
-
 local function getEquippedWeapon()
-	local character = LocalPlayer.Character
-	if not character then return nil end
+	local char = LocalPlayer.Character
+	if not char then return nil end
 	local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
 	local blasterFolder = ReplicatedStorage:FindFirstChild("Blaster")
 	if not blasterFolder or not blasterFolder:FindFirstChild("ViewModels") then return nil end
@@ -75,7 +58,7 @@ local function getEquippedWeapon()
 		table.insert(weaponNames, model.Name)
 	end
 
-	for _, tool in ipairs(character:GetChildren()) do
+	for _, tool in ipairs(char:GetChildren()) do
 		if tool:IsA("Tool") and table.find(weaponNames, tool.Name) then
 			return tool
 		end
@@ -88,70 +71,46 @@ local function getEquippedWeapon()
 	return nil
 end
 
--- MAIN TAB
-MainTab:Input({
-	Title="WalkSpeed",
-	Desc="Set your walking speed",
-	Value=tostring(WalkSpeedValue),
-	Type="Input",
-	Placeholder="Enter speed...",
-	Callback=function(input)
-		local val = tonumber(input)
-		if val then
-			WalkSpeedValue = val
+local function getEnemies()
+	local myTeam = getTeam(LocalPlayer)
+	local enemies = {}
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and isAlive(plr) and plr.Character then
+			local enemyTeam = getTeam(plr)
+			if enemyTeam and enemyTeam ~= myTeam then
+				table.insert(enemies, plr)
+			end
 		end
 	end
-})
+	return enemies
+end
 
-MainTab:Toggle({
-	Title="Aimbot",
-	Desc="Automatically aim at enemies",
-	Type="Checkbox",
-	Default=false,
-	Callback=function(state)
-		AimbotEnabled = state
+local function getNearestEnemy()
+	local nearest, dist
+	for _, plr in ipairs(getEnemies()) do
+		local head = plr.Character:FindFirstChild("Head")
+		if head and isVisible(head) then
+			local d = (Camera.CFrame.Position - head.Position).Magnitude
+			if not nearest or d < dist then
+				nearest, dist = head, d
+			end
+		end
 	end
-})
+	return nearest
+end
 
-MainTab:Toggle({
-	Title="Auto Shoot",
-	Desc="Automatically shoot when aiming",
-	Type="Checkbox",
-	Default=false,
-	Callback=function(state)
-		AutoShootEnabled = state
+local function getLowestEnemy()
+	local lowest, lowestHp
+	for _, plr in ipairs(getEnemies()) do
+		local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+		if hum and isVisible(plr.Character:FindFirstChild("Head")) then
+			if not lowest or hum.Health < lowestHp then
+				lowest, lowestHp = plr, hum.Health
+			end
+		end
 	end
-})
-
--- AIMBOT + AUTOSHOOT CORE LOOP
-RunService.RenderStepped:Connect(function()
-	if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
-		LocalPlayer.Character.Humanoid.WalkSpeed = WalkSpeedValue
-	end
-
-	if not AimbotEnabled then return end
-
-	-- Check if Roblox menu is open (mouse free)
-	if UserInputService.MouseBehavior == Enum.MouseBehavior.Default then
-		return
-	end
-
-	-- Check if holding valid weapon
-	EquippedWeapon = getEquippedWeapon()
-	if not EquippedWeapon then
-		return
-	end
-
-	local target = getNearestEnemy()
-	if not target then return end
-
-	Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Position)
-
-	if AutoShootEnabled and target and isVisible(target) then
-		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-	end
-end)
+	return lowest and lowest.Character and lowest.Character:FindFirstChild("Head") or nil
+end
 
 -- ESP
 local function createESP(character, color)
@@ -172,44 +131,21 @@ local function removeESP(character)
 end
 
 local function updateESP()
-	if not ESPEnabled then
-		for _,plr in pairs(Players:GetPlayers()) do
-			if plr.Character then removeESP(plr.Character) end
-		end
-		return
-	end
-
-	local myTeam = getTeam(LocalPlayer)
-	for _,plr in pairs(Players:GetPlayers()) do
+	for _, plr in pairs(Players:GetPlayers()) do
 		if plr ~= LocalPlayer and plr.Character then
+			removeESP(plr.Character)
+			local myTeam = getTeam(LocalPlayer)
 			local enemyTeam = getTeam(plr)
-			if myTeam == "Pink" then
-				if enemyTeam == "Green" then
-					createESP(plr.Character, Color3.fromRGB(255,0,0))
-				else
-					createESP(plr.Character, Color3.fromRGB(255,105,180))
-				end
-			elseif myTeam == "Green" then
-				if enemyTeam == "Pink" then
-					createESP(plr.Character, Color3.fromRGB(255,0,0))
-				else
-					createESP(plr.Character, Color3.fromRGB(0,255,0))
+			if myTeam and enemyTeam then
+				if enemyTeam == myTeam and ESPTeamEnabled then
+					createESP(plr.Character, Color3.fromRGB(0, 255, 0))
+				elseif enemyTeam ~= myTeam and ESPEnemyEnabled then
+					createESP(plr.Character, Color3.fromRGB(255, 0, 0))
 				end
 			end
 		end
 	end
 end
-
-ESPTab:Toggle({
-	Title="Enable ESP",
-	Desc="Highlights players by team",
-	Type="Checkbox",
-	Default=false,
-	Callback=function(state)
-		ESPEnabled = state
-		updateESP()
-	end
-})
 
 Players.PlayerAdded:Connect(function(p)
 	p.CharacterAdded:Connect(function()
@@ -223,5 +159,133 @@ Players.PlayerRemoving:Connect(function(p)
 end)
 
 RunService.RenderStepped:Connect(function()
-	if ESPEnabled then updateESP() end
+	if ESPTeamEnabled or ESPEnemyEnabled then
+		updateESP()
+	end
 end)
+
+-- MAIN TAB
+MainTab:Input({
+	Title="WalkSpeed",
+	Value=tostring(WalkSpeedValue),
+	Type="Input",
+	Placeholder="Enter speed...",
+	Callback=function(input)
+		local val = tonumber(input)
+		if val then WalkSpeedValue = val end
+	end
+})
+
+MainTab:Toggle({
+	Title="Aimbot",
+	Desc="Aim at nearest enemy",
+	Type="Checkbox",
+	Default=false,
+	Callback=function(state)
+		AimbotEnabled = state
+	end
+})
+
+MainTab:Toggle({
+	Title="Auto Shoot",
+	Desc="Shoot when aiming",
+	Type="Checkbox",
+	Default=false,
+	Callback=function(state)
+		AutoShootEnabled = state
+	end
+})
+
+MainTab:Toggle({
+	Title="Auto Hide From Death",
+	Desc="Teleports to safe spot when low health",
+	Type="Checkbox",
+	Default=false,
+	Callback=function(state)
+		AutoHideFromDeathEnabled = state
+	end
+})
+
+MainTab:Toggle({
+	Title="Kill Lowest",
+	Desc="Kills lowest HP enemy first (requires AutoShoot)",
+	Type="Checkbox",
+	Default=false,
+	Callback=function(state)
+		KillLowestEnabled = state
+	end
+})
+
+-- AUTO HIDE LOOP
+RunService.Heartbeat:Connect(function()
+	if AutoHideFromDeathEnabled and LocalPlayer.Character then
+		local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health <= 10 and not IsHiding then
+			IsHiding = true
+			LastPos = LocalPlayer.Character.HumanoidRootPart.CFrame
+			LocalPlayer.Character.HumanoidRootPart.CFrame = SafeSpot
+
+			local box = Instance.new("Part")
+			box.Anchored = true
+			box.Size = Vector3.new(10,10,10)
+			box.CFrame = SafeSpot
+			box.Transparency = 0.8
+			box.CanCollide = true
+			box.Color = Color3.fromRGB(255, 0, 0)
+			box.Parent = workspace
+
+			repeat task.wait(1) until hum.Health >= hum.MaxHealth - 1
+			box:Destroy()
+			LocalPlayer.Character.HumanoidRootPart.CFrame = LastPos
+			IsHiding = false
+		end
+	end
+end)
+
+-- AIMBOT + AUTOSHOOT
+RunService.RenderStepped:Connect(function()
+	if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+		LocalPlayer.Character.Humanoid.WalkSpeed = WalkSpeedValue
+	end
+
+	if not AimbotEnabled then return end
+	if UserInputService.MouseBehavior == Enum.MouseBehavior.Default then return end
+
+	EquippedWeapon = getEquippedWeapon()
+	if not EquippedWeapon then return end
+
+	local target
+	if KillLowestEnabled and AutoShootEnabled then
+		target = getLowestEnemy()
+	else
+		target = getNearestEnemy()
+	end
+	if not target then return end
+
+	Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Position)
+	if AutoShootEnabled and target and isVisible(target) then
+		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+	end
+end)
+
+-- ESP TAB
+ESPTab:Toggle({
+	Title="Team ESP",
+	Type="Checkbox",
+	Default=false,
+	Callback=function(state)
+		ESPTeamEnabled = state
+		updateESP()
+	end
+})
+
+ESPTab:Toggle({
+	Title="Enemy ESP",
+	Type="Checkbox",
+	Default=false,
+	Callback=function(state)
+		ESPEnemyEnabled = state
+		updateESP()
+	end
+})
