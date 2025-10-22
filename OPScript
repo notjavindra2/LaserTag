@@ -11,19 +11,79 @@ local MiscTab = Window:Tab({Title="Misc", Icon="settings"})
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local Camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
 
 -- Variables
 local WalkSpeedValue = 22
 local AimbotEnabled = false
 local AutoShootEnabled = false
 local ESPEnabled = false
+local EquippedWeapon = nil
 
 -- Helpers
 local function getTeam(plr)
 	if plr.Team and plr.Team.Name then
 		return plr.Team.Name
+	end
+	return nil
+end
+
+local function isAlive(plr)
+	local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+	return hum and hum.Health > 0
+end
+
+local function isVisible(target)
+	local origin = Camera.CFrame.Position
+	local direction = (target.Position - origin)
+	local ray = Ray.new(origin, direction)
+	local hitPart = workspace:FindPartOnRayWithIgnoreList(ray, {LocalPlayer.Character})
+	return hitPart == nil or hitPart:IsDescendantOf(target.Parent)
+end
+
+local function getNearestEnemy()
+	local myTeam = getTeam(LocalPlayer)
+	if not myTeam then return nil end
+	local nearest, nearestDist
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and isAlive(plr) then
+			local enemyTeam = getTeam(plr)
+			if enemyTeam and enemyTeam ~= myTeam and plr.Character and plr.Character:FindFirstChild("Head") then
+				local head = plr.Character.Head
+				local dist = (Camera.CFrame.Position - head.Position).Magnitude
+				if (not nearest or dist < nearestDist) and isVisible(head) then
+					nearest, nearestDist = head, dist
+				end
+			end
+		end
+	end
+	return nearest
+end
+
+local function getEquippedWeapon()
+	local character = LocalPlayer.Character
+	if not character then return nil end
+	local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+	local blasterFolder = ReplicatedStorage:FindFirstChild("Blaster")
+	if not blasterFolder or not blasterFolder:FindFirstChild("ViewModels") then return nil end
+
+	local weaponNames = {}
+	for _, model in ipairs(blasterFolder.ViewModels:GetChildren()) do
+		table.insert(weaponNames, model.Name)
+	end
+
+	for _, tool in ipairs(character:GetChildren()) do
+		if tool:IsA("Tool") and table.find(weaponNames, tool.Name) then
+			return tool
+		end
+	end
+	for _, tool in ipairs(backpack:GetChildren()) do
+		if tool:IsA("Tool") and table.find(weaponNames, tool.Name) then
+			return tool
+		end
 	end
 	return nil
 end
@@ -55,7 +115,7 @@ MainTab:Toggle({
 
 MainTab:Toggle({
 	Title="Auto Shoot",
-	Desc="Automatically shoots when aiming at enemies",
+	Desc="Automatically shoot when aiming",
 	Type="Checkbox",
 	Default=false,
 	Callback=function(state)
@@ -63,7 +123,7 @@ MainTab:Toggle({
 	end
 })
 
--- Aimbot Logic
+-- AIMBOT + AUTOSHOOT CORE LOOP
 RunService.RenderStepped:Connect(function()
 	if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
 		LocalPlayer.Character.Humanoid.WalkSpeed = WalkSpeedValue
@@ -71,35 +131,25 @@ RunService.RenderStepped:Connect(function()
 
 	if not AimbotEnabled then return end
 
-	local myTeam = getTeam(LocalPlayer)
-	if not myTeam then return end
-
-	local nearestTarget, nearestDist
-	for _, plr in ipairs(Players:GetPlayers()) do
-		if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-			local enemyTeam = getTeam(plr)
-			if myTeam ~= enemyTeam then
-				local head = plr.Character:FindFirstChild("Head")
-				if head then
-					local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
-					if onScreen then
-						local mousePos = UserInputService:GetMouseLocation()
-						local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-						if not nearestDist or dist < nearestDist then
-							nearestDist = dist
-							nearestTarget = head
-						end
-					end
-				end
-			end
-		end
+	-- Check if Roblox menu is open (mouse free)
+	if UserInputService.MouseBehavior == Enum.MouseBehavior.Default then
+		return
 	end
 
-	if nearestTarget then
-		Camera.CFrame = CFrame.new(Camera.CFrame.Position, nearestTarget.Position)
-		if AutoShootEnabled then
-			mouse1click()
-		end
+	-- Check if holding valid weapon
+	EquippedWeapon = getEquippedWeapon()
+	if not EquippedWeapon then
+		return
+	end
+
+	local target = getNearestEnemy()
+	if not target then return end
+
+	Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Position)
+
+	if AutoShootEnabled and target and isVisible(target) then
+		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
 	end
 end)
 
@@ -152,7 +202,7 @@ end
 
 ESPTab:Toggle({
 	Title="Enable ESP",
-	Desc="Highlights team colors dynamically",
+	Desc="Highlights players by team",
 	Type="Checkbox",
 	Default=false,
 	Callback=function(state)
