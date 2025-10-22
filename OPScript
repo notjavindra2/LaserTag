@@ -1,3 +1,4 @@
+-- LaserTag.lua
 local Version = "1.6.31"
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/download/" .. Version .. "/main.lua"))()
 local Window = WindUI:CreateWindow({Title="LaserTag", Size=UDim2.new(0,500,0,400), Theme="Dark"})
@@ -28,6 +29,7 @@ local EquippedWeapon = nil
 local SafeSpot = CFrame.new(-113.013, 105.444, 67.366)
 local IsHiding = false
 local LastPos
+local ESPObjects = {}
 
 -- Helpers
 local function getTeam(plr)
@@ -103,7 +105,8 @@ local function getLowestEnemy()
 	local lowest, lowestHp
 	for _, plr in ipairs(getEnemies()) do
 		local hum = plr.Character:FindFirstChildOfClass("Humanoid")
-		if hum and isVisible(plr.Character:FindFirstChild("Head")) then
+		local head = plr.Character:FindFirstChild("Head")
+		if hum and head and isVisible(head) then
 			if not lowest or hum.Health < lowestHp then
 				lowest, lowestHp = plr, hum.Health
 			end
@@ -114,20 +117,21 @@ end
 
 -- ESP
 local function createESP(character, color)
-	if not character or character:FindFirstChild("LaserTagESP") then return end
-	local h = Instance.new("Highlight")
-	h.Name = "LaserTagESP"
-	h.Adornee = character
-	h.FillColor = color
-	h.FillTransparency = 0.5
-	h.OutlineColor = Color3.new(0,0,0)
-	h.OutlineTransparency = 0
-	h.Parent = character
+	if not character or ESPObjects[character] then return end
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "LaserTagESP"
+	highlight.Adornee = character
+	highlight.FillColor = color
+	highlight.FillTransparency = 0.5
+	highlight.OutlineColor = Color3.new(0,0,0)
+	highlight.OutlineTransparency = 0
+	highlight.Parent = character
+	ESPObjects[character] = highlight
 end
 
 local function removeESP(character)
-	local h = character and character:FindFirstChild("LaserTagESP")
-	if h then h:Destroy() end
+	local h = ESPObjects[character]
+	if h then h:Destroy() ESPObjects[character] = nil end
 end
 
 local function updateESP()
@@ -262,7 +266,9 @@ RunService.RenderStepped:Connect(function()
 	end
 	if not target then return end
 
-	Camera.CFrame = CFrame.new(Camera.CFrame.Position, target.Position)
+	-- Smooth aimbot
+	Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, target.Position), 0.25)
+
 	if AutoShootEnabled and target and isVisible(target) then
 		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
 		VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
